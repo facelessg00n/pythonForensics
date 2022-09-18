@@ -14,7 +14,7 @@ import sys
 
 # Details
 __description__ = "Extract contact data from Cellebrite Excel files"
-__author__ = "79036"
+__author__ = "facelessg00n"
 __version__ = "0.1"
 
 # ---------------------Options----------------------------------------------

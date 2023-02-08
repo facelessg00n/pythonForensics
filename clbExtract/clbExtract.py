@@ -4,6 +4,8 @@ Extracts nested contacts data from Cellebrite formatted Excel documents.
 Formatted with Black
 
 Changelog
+0.4a - Added support for Cellebrite files with device info stored in "device" rather than name columns
+
 0.4 - Add support for alternate Cellebrite info page format
     - Add support For Line, WeChat, Threema contacts
 
@@ -27,11 +29,11 @@ import sys
 ## Details
 __description__ = 'Flattens Cellebrite formatted Excel files. "Contacts" and "Device Info" tabs are required.'
 __author__ = "facelessg00n"
-__version__ = "0.4"
+__version__ = "0.4a"
 
 parser = argparse.ArgumentParser(
     description=__description__,
-    epilog="Developed by {}".format(str(__author__), str(__version__)),
+    epilog="Developed by {}, Version {}".format(str(__author__), str(__version__)),
 )
 
 # ----------- Options -----------
@@ -40,7 +42,7 @@ debug = False
 os.chdir(os.getcwd())
 
 logging.basicConfig(
-    filename="clbExtract.log",
+    filename="clbFlatten.log",
     format="%(asctime)s,- %(levelname)s - %(message)s",
     level=logging.INFO,
 )
@@ -123,7 +125,26 @@ def processMetadata(inputFile):
             inputFile, sheet_name=clbPhoneInfo, header=1, usecols="B,C,D"
         )
 
-        phoneData.IMEI = infoPD.loc[infoPD["Name"] == "IMEI", ["Value"]].values[0][0]
+        try:
+            phoneData.IMEI = infoPD.loc[infoPD["Name"] == "IMEI", ["Value"]].values[0][
+                0
+            ]
+            phoneData.inFile = Path(inputFile).stem
+            phoneData.inPath = os.path.dirname(inputFile)
+        except:
+            print("Attempting Device Column")
+            try:
+                phoneData.IMEI = infoPD.loc[
+                    infoPD["Device"] == "IMEI", ["Value"]
+                ].values[0][0]
+                phoneData.inFile = Path(inputFile).stem
+                phoneData.inPath = os.path.dirname(inputFile)
+            except:
+                print("IMEI not located, setting to NULL")
+                phoneData.IMEI = None
+                phoneData.inFile = Path(inputFile).stem
+                phoneData.inPath = os.path.dirname(inputFile)
+
         try:
             phoneData.IMEI2 = infoPD.loc[infoPD["Name"] == "IMEI2", ["Value"]].values[
                 0
@@ -566,6 +587,7 @@ def processTelegram(contactsPD):
 
 # ------ Parse Threema Contacts -----------------------------------------------------------------
 def processThreema(contactsPD):
+    print("\nProcessing Threema")
     ThreemaPD = contactsPD[contactsPD["Source"] == "Threema"].copy()
     ThreemaPD = ThreemaPD.drop("Entries", axis=1).join(
         ThreemaPD["Entries"].str.split("\n", expand=True)
@@ -700,7 +722,6 @@ def processWhatsapp(contactsPD):
 
     # Look for data across expanded columns and shift it to output columns.
     def whatsappContactProcess(whatsAppPD):
-        print("\nProcessing WhatsApp")
         for x in selected_cols:
             whatsAppPD.loc[
                 (whatsAppPD[x].str.contains("Phone-Mobile", na=False)), "Phone-Mobile"
@@ -814,7 +835,7 @@ def processZalo(contactsPD):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__description__,
-        epilog="Developed by {}".format(str(__author__), str(__version__)),
+        epilog="Developed by {}, version {}".format(str(__author__), str(__version__)),
     )
 
     parser.add_argument(

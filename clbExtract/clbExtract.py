@@ -4,6 +4,16 @@ Extracts nested contacts data from Cellebrite formatted Excel documents.
 Formatted with Black
 
 Changelog
+0.5 - Added support for recents - at this time this is kept separate from native contacts
+    - Warning re large files, pandas is unable to provide load time estimates
+    - Add option to normalise Au mobile phone by converting +614** to 04**
+    - Minor tidyups and fixes to logging.
+    - Fix WeChat exception for older style excels
+    - Fix Whatsapp exeption when interaction status is not populated
+    - Fix exception when there is no IMEI entry at all, eg. older iPads
+    - Populate and export source file columns
+
+
 0.4a - Added support for Cellebrite files with device info stored in "device" rather than name columns
 
 0.4 - Add support for alternate Cellebrite info page format
@@ -25,24 +35,32 @@ import pandas as pd
 from pathlib import Path
 import sys
 
-
 ## Details
 __description__ = 'Flattens Cellebrite formatted Excel files. "Contacts" and "Device Info" tabs are required.'
 __author__ = "facelessg00n"
-__version__ = "0.4a"
+__version__ = "0.5"
 
 parser = argparse.ArgumentParser(
     description=__description__,
-    epilog="Developed by {}, Version {}".format(str(__author__), str(__version__)),
+    epilog="Developed by {}".format(str(__author__), str(__version__)),
 )
 
 # ----------- Options -----------
-debug = False
-
 os.chdir(os.getcwd())
 
+# Show extra debug output
+debug = False
+
+# Normalise Australian mobile numbers by replacing +614 with 04
+ausNormal = True
+
+# File size warning (MB)
+warnSize = 50
+
+# ----------- Logging options -------------------------------------
+
 logging.basicConfig(
-    filename="clbFlatten.log",
+    filename="clbExtract.log",
     format="%(asctime)s,- %(levelname)s - %(message)s",
     level=logging.INFO,
 )
@@ -59,14 +77,15 @@ contactOutput = "ContactDetail"
 contactTypeOutput = "ContactType"
 originIMEI = "originIMEI"
 parsedApps = [
+    "Facebook Messenger",
     "Instagram",
+    "Line",
     "Native",
-    "Telegram",
+    "Recents",
+    "Signal",
     "Snapchat",
     "WhatsApp",
-    "Facebook Messenger",
-    "Signal",
-    "Line",
+    "Telegram",
     "Threema",
     "WeChat",
     "Zalo",
@@ -92,11 +111,12 @@ class phoneData:
 # ----- Bulk Excel Processor--------------------------------------------------
 
 
-# Finds and processes all exxcel files in the working directory.
+# Finds and processes all excel files in the working directory.
 def bulkProcessor():
     FILE_PATH = os.getcwd()
     inputFiles = glob.glob("*.xlsx")
     print((str(len(inputFiles)) + " Excel files located. \n"))
+    logging.info("Bulk processing {} files".format(str(len(inputFiles))))
     # If there are no files found exit the process.
     if len(inputFiles) == 0:
         print("No excel files located.")
@@ -120,6 +140,20 @@ def bulkProcessor():
 # FIXME - Deal with error when this info is missing
 ### -------- Process phone metadata ------------------------------------------------------
 def processMetadata(inputFile):
+    inputFile = inputFile
+    print("Extracting metadata from {}".format(inputFile))
+    logging.info("Extracting metadata from {}".format(inputFile))
+
+    fileSize = os.path.getsize(inputFile) / 1048576
+    if fileSize > warnSize:
+        print(
+            "Large input file detected, {} MB and may take some time to process, sadly progress is not able to be updated while the file is loading".format(
+                f"{fileSize:.2f}"
+            )
+        )
+    else:
+        print("Input file is {} MB".format(f"{fileSize:.2f}"))
+
     try:
         infoPD = pd.read_excel(
             inputFile, sheet_name=clbPhoneInfo, header=1, usecols="B,C,D"
@@ -151,6 +185,8 @@ def processMetadata(inputFile):
             ][0]
         except:
             phoneData.IMEI2 = None
+            phoneData.inFile = Path(inputFile).stem
+            phoneData.inPath = os.path.dirname(inputFile)
         # phoneData.inFile = inputFile.split(".")[0]
         phoneData.inFile = Path(inputFile).stem
         phoneData.inPath = os.path.dirname(inputFile)
@@ -177,10 +213,22 @@ def processMetadata(inputFile):
             ]
             print("Second format succeeded")
             logging.info("Second format succeeded on {}".format(inputFile))
-            # print(infoPD)
-            # print(infoPD.loc[infoPD["Name"] == "IMEI", ["Value"]].values[0][0])
+
             phoneData.inFile = Path(inputFile).stem
             phoneData.inPath = os.path.dirname(inputFile)
+
+        except IndexError:
+            print("IMEI not located, is this a tablet or iPAD?")
+            logging.warning(
+                "IMEI not found in {}, apptempting with with no IMEI".format(inputFile)
+            )
+            phoneData.IMEI = None
+            phoneData.IMEI2 = None
+
+            phoneData.inFile = Path(inputFile).stem
+            phoneData.inPath = os.path.dirname(inputFile)
+            print("Loaded {}, with no IMEI".format(inputFile))
+            logging.info("Loaded {}, with no IMEI".format(inputFile))
 
         except ValueError:
             print(
@@ -213,12 +261,23 @@ def processMetadata(inputFile):
 
 
 ### Extract contacts tab of Excel file -------------------------------------------------------------------
+# This creates the initial dataframe, future processing is from copies of this dataframe.
 def processContacts(inputFile):
     inputFile = inputFile
-    logging.info("Processing contacts in {} has begun.".format(inputFile))
+    fileSize = os.path.getsize(inputFile) / 1048576
+    print("Processing contacts in {} has begun.".format(phoneData.inFile))
+    logging.info("Processing contacts in {} has begun.".format(phoneData.inFile))
+
+    if fileSize > warnSize:
+        print(
+            "Large input file detected, {} MB and may take some time to process, sadly progress is not able to be updated while the file is loading".format(
+                f"{fileSize:.2f}"
+            )
+        )
+    else:
+        print("Input file is {} MB".format(f"{fileSize:.2f}"))
 
     # Record input filename for use in export processes.
-
     if debug:
         print("\033[0;37m Input file is : {}".format(phoneData.inFile))
 
@@ -230,9 +289,7 @@ def processContacts(inputFile):
         usecols=["#", "Name", "Interaction Statuses", "Entries", "Source", "Account"],
     )
 
-    print(
-        "\033[0m Processing the following app types for : {}".format(phoneData.inFile)
-    )
+    print("\033[0mProcessing the following app types for : {}".format(phoneData.inFile))
     applist = contactsPD["Source"].unique()
     for x in applist:
         if x in parsedApps:
@@ -253,6 +310,8 @@ def processContacts(inputFile):
             processInstagram(contactsPD)
         if x == "Line":
             processLine(contactsPD)
+        if x == "Recents":
+            processRecents(contactsPD)
         if x == "Snapchat":
             processSnapChat(contactsPD)
         if x == "Telegram":
@@ -267,6 +326,8 @@ def processContacts(inputFile):
             processWhatsapp(contactsPD)
         if x == "Zalo":
             processZalo(contactsPD)
+
+    print("\nProcessing of {} complete".format(inputFile))
 
 
 # ------ Parse Facebook Messenger --------------------------------------------------------------
@@ -295,7 +356,11 @@ def processFacebookMessenger(contactsPD):
             ] = facebookMessengerPD[x].str.split(":", n=1, expand=True)[1]
 
     phoneCheck(facebookMessengerPD)
+
+    facebookMessengerPD["Source"] = "Messenger"
     facebookMessengerPD[originIMEI] = phoneData.IMEI
+    facebookMessengerPD["inputFile"] = phoneData.inFile
+
     exportCols = []
     for x in facebookMessengerPD.columns:
         if isinstance(x, str):
@@ -318,6 +383,7 @@ def processFacebookMessenger(contactsPD):
             "User Name",
             "Account ID",
             "Source",
+            "inputFile",
         ],
     )
 
@@ -348,6 +414,8 @@ def processInstagram(contactsPD):
     instaContacts(instagramPD)
 
     instagramPD[originIMEI] = phoneData.IMEI
+    instagramPD["inputFile"] = phoneData.inFile
+
     exportCols = []
     for x in instagramPD.columns:
         if isinstance(x, str):
@@ -365,6 +433,9 @@ def processInstagram(contactsPD):
             "User Name",
             "Instagram ID",
             "Interaction Statuses",
+            "inputFile",
+            "Source",
+            "inputFile",
         ],
     )
 
@@ -372,14 +443,14 @@ def processInstagram(contactsPD):
 # ---- Process Line -----------------------------------------------------------------------
 def processLine(contactsPD):
     print("Processing Line")
-    LinePD = contactsPD[contactsPD["Source"] == "Line"].copy()
-    LinePD = LinePD.drop("Entries", axis=1).join(
-        LinePD["Entries"].str.split("\n", expand=True)
+    linePD = contactsPD[contactsPD["Source"] == "Line"].copy()
+    linePD = linePD.drop("Entries", axis=1).join(
+        linePD["Entries"].str.split("\n", expand=True)
     )
-    LinePD = LinePD.reset_index(drop=True)
+    linePD = linePD.reset_index(drop=True)
 
     selected_cols = []
-    for x in LinePD.columns:
+    for x in linePD.columns:
         if isinstance(x, int):
             selected_cols.append(x)
 
@@ -399,18 +470,20 @@ def processLine(contactsPD):
                 "LineServerID",
             ] = LinePD[x].str.split(":", n=1, expand=True)[1]
 
-    processLine(LinePD)
-    LinePD[originIMEI] = phoneData.IMEI
+    processLine(linePD)
+
+    linePD[originIMEI] = phoneData.IMEI
+    linePD["inputFile"] = phoneData.inFile
     exportCols = []
 
-    for x in LinePD.columns:
+    for x in linePD.columns:
         if isinstance(x, str):
             exportCols.append(x)
 
-    print("{} Line contacts located".format(len(LinePD["Name"])))
+    print("{} Line contacts located".format(len(linePD["Name"])))
     print("Exporting {}-LINE.csv".format(phoneData.inFile))
     logging.info("Exporting Line contacts from {}".format(phoneData.inFile))
-    LinePD[exportCols].to_csv("{}-LINE.csv".format(phoneData.inFile), index=False)
+    linePD[exportCols].to_csv("{}-LINE.csv".format(phoneData.inFile), index=False)
 
 
 # ------------Process native contact list ------------------------------------------------
@@ -432,28 +505,64 @@ def processAppleNative(contactsPD):
         .rename("Entries")
     )
 
-    nativeContactsPD = nativeContactsPD[["Name", "Interaction Statuses", "Entries"]]
+    # nativeContactsPD = nativeContactsPD[["Name", "Interaction Statuses", "Entries"]]
 
     nativeContactsPD = nativeContactsPD[
         nativeContactsPD["Entries"].str.contains(r"Phone-")
     ]
     nativeContactsPD[originIMEI] = phoneData.IMEI
+    nativeContactsPD["inputFile"] = phoneData.inFile
+
     nativeContactsPD["Entries"] = (
         nativeContactsPD["Entries"]
         .str.split(":", n=1, expand=True)[1]
         .str.strip()
         .str.replace(" ", "")
         .str.replace("-", "")
+        .str.replace("+", "", regex=False)
     )
+
+    if ausNormal:
+        nativeContactsPD["Entries"] = nativeContactsPD["Entries"].str.replace(
+            r"\+614", "04", regex=True
+        )
+
     if debug:
         print(nativeContactsPD)
-    nativeContactsPD = nativeContactsPD[
-        [originIMEI, "Name", "Entries", "Interaction Statuses"]
-    ]
+    # nativeContactsPD = nativeContactsPD[[originIMEI, "Name", "Entries", "Interaction Statuses"]]
     print("{} contacts located.".format(len(nativeContactsPD)))
     print("Exporting {}-NATIVE.csv".format(phoneData.inFile))
     logging.info("Exporting Native contacts from {}".format(phoneData.inFile))
     nativeContactsPD.to_csv("{}-NATIVE.csv".format(phoneData.inFile), index=False)
+
+
+# ----------- Parse Recents -----------------------------------------------------------------------
+def processRecents(contactsPD):
+    print("\nProcessing Recents")
+    recentsPD = contactsPD[contactsPD["Source"] == "Recents"].copy()
+    recentsPD.Entries = recentsPD.Entries.fillna(":")
+    recentsPD = recentsPD[recentsPD["Entries"].str.contains(r"Phone-")]
+
+    recentsPD[originIMEI] = phoneData.IMEI
+    recentsPD["inputFile"] = phoneData.inFile
+
+    recentsPD["Entries"] = (
+        recentsPD["Entries"]
+        .str.split(":", n=1, expand=True)[1]
+        .str.strip()
+        .str.replace(" ", "")
+        .str.replace("-", "")
+        # .str.replace("+","",regex=False)
+    )
+    if ausNormal:
+        recentsPD["Entries"] = recentsPD["Entries"].str.replace(
+            r"\+614", "04", regex=True
+        )
+
+    print("{} recent contacts located.".format(len(recentsPD)))
+    print("Exporting {}-RECENT.csv".format(phoneData.inFile))
+    logging.info("Exporting recent contacts from {}".format(phoneData.inFile))
+    recentsPD.to_csv("{}-RECENTS.csv".format(phoneData.inFile), index=False)
 
 
 # ------------Parse Signal contacts ---------------------------------------------------------------
@@ -471,6 +580,7 @@ def processSignal(contactsPD):
         if isinstance(x, int):
             selected_cols.append(x)
 
+    # FIXME improve with method used for other apps
     # Signal can store mutiple values under entries such as Mobile Number:
     # So we break them all out into columns.
     def signalContact(signalPD):
@@ -490,6 +600,7 @@ def processSignal(contactsPD):
     signalContact(signalPD)
 
     signalPD[originIMEI] = phoneData.IMEI
+    signalPD["inputFile"] = phoneData.inFile
 
     export_cols = [originIMEI, "Name", "User Name"]
     export_cols.extend(selected_cols)
@@ -526,7 +637,9 @@ def processSnapChat(contactsPD):
             ] = snapPD[x].str.split(":", n=1, expand=True)[1]
 
     snapContacts(snapPD)
+
     snapPD[originIMEI] = phoneData.IMEI
+    snapPD["inputFile"] = phoneData.inFile
 
     exportCols = []
     for x in snapPD.columns:
@@ -534,12 +647,14 @@ def processSnapChat(contactsPD):
             exportCols.append(x)
     if debug:
         print(snapPD[exportCols])
+
+    print("{} Snapchat contacts located.".format(len(snapPD)))
     print("Exporting {}-SNAPCHAT.csv".format(phoneData.inFile))
     logging.info("Exporting Snapchat from {}".format(phoneData.inFile))
     snapPD[exportCols].to_csv(
         "{}-SNAPCHAT.csv".format(phoneData.inFile),
         index=False,
-        columns=[originIMEI, "Name", "User Name", "User ID"],
+        columns=[originIMEI, "Name", "User Name", "User ID", "inputFile", "Source"],
     )
 
 
@@ -572,12 +687,15 @@ def processTelegram(contactsPD):
             ] = telegramPD[x].str.split(":", n=1, expand=True)[1]
 
     phoneCheck(telegramPD)
+
     telegramPD[originIMEI] = phoneData.IMEI
+    telegramPD["inputFile"] = phoneData.inFile
     exportCols = []
     for x in telegramPD.columns:
         if isinstance(x, str):
             exportCols.append(x)
     # Export CSV
+    print("{} Telegram contacts located.".format(len(telegramPD)))
     print("Exporting {}-TELEGRAM.csv".format(phoneData.inFile))
     logging.info("Exporting Telegram from {}".format(phoneData.inFile))
     telegramPD[exportCols].to_csv(
@@ -588,14 +706,14 @@ def processTelegram(contactsPD):
 # ------ Parse Threema Contacts -----------------------------------------------------------------
 def processThreema(contactsPD):
     print("\nProcessing Threema")
-    ThreemaPD = contactsPD[contactsPD["Source"] == "Threema"].copy()
-    ThreemaPD = ThreemaPD.drop("Entries", axis=1).join(
-        ThreemaPD["Entries"].str.split("\n", expand=True)
+    threemaPD = contactsPD[contactsPD["Source"] == "Threema"].copy()
+    threemaPD = threemaPD.drop("Entries", axis=1).join(
+        threemaPD["Entries"].str.split("\n", expand=True)
     )
-    ThreemaPD = ThreemaPD.reset_index(drop=True)
+    threemaPD = threemaPD.reset_index(drop=True)
 
     selected_cols = []
-    for x in ThreemaPD.columns:
+    for x in threemaPD.columns:
         if isinstance(x, int):
             selected_cols.append(x)
 
@@ -605,17 +723,19 @@ def processThreema(contactsPD):
                 (ThreemaPD[x].str.contains("User ID-:", na=False)), "Threema ID"
             ] = ThreemaPD[x].str.split(":", n=1, expand=True)[1]
 
-    ThreemaParse(ThreemaPD)
-    ThreemaPD[originIMEI] = phoneData.IMEI
+    ThreemaParse(threemaPD)
+
+    threemaPD[originIMEI] = phoneData.IMEI
+    threemaPD["inputFile"] = phoneData.inFile
 
     exportCols = []
-    for x in ThreemaPD.columns:
+    for x in threemaPD.columns:
         if isinstance(x, str):
             exportCols.append(x)
 
     print("Exporting {}-THREEMA.csv".format(phoneData.inFile))
     logging.info("Exporting Threema from {}".format(phoneData.inFile))
-    ThreemaPD[exportCols].to_csv("{}-THREEMA.csv".format(phoneData.inFile), index=False)
+    threemaPD[exportCols].to_csv("{}-THREEMA.csv".format(phoneData.inFile), index=False)
 
 
 ## Parse WeChat Contacts ------------------------------------------------------------------------
@@ -680,11 +800,18 @@ def processWeChat(contactsPD):
     WeChatContacts(WeChatPD)
 
     # Repalace we chat ID's with @ stranhger with blank values as are not we chat user IDs
-    WeChatPD.WeChatID = WeChatPD.WeChatID.apply(
-        lambda x: "" if (r"@stranger") in x else x
-    )
+    try:
+        WeChatPD.WeChatID = WeChatPD.WeChatID.apply(
+            lambda x: "" if (r"@stranger") in str(x) else x
+        )
+    except:
+        print("WeChat float exception")
+        print(WeChatPD.WeChatID)
+        pass
 
     WeChatPD[originIMEI] = phoneData.IMEI
+    WeChatPD["inputFile"] = phoneData.inFile
+    WeChatPD["Source"] = "Weixin"
 
     # Export Columns where the title is a string to drop working columns
     exportCols = []
@@ -703,7 +830,15 @@ def processWhatsapp(contactsPD):
     print("\nProcessing WhatsApp")
     whatsAppPD = contactsPD[contactsPD["Source"] == "WhatsApp"].copy()
     whatsAppPD = whatsAppPD[["Name", "Entries", "Source", "Interaction Statuses"]]
+    # Datatype needs to be object not float to allow filtering by string without throwing an error
+    try:
+        whatsAppPD["Interaction Statuses"] = whatsAppPD["Interaction Statuses"].astype(
+            object
+        )
+    except Exception as e:
+        print(e)
     # Shared contacts are not associated with a Whats app ID and cause problems.
+    print(whatsAppPD.dtypes)
     whatsAppPD = whatsAppPD[
         whatsAppPD["Interaction Statuses"].str.contains("Shared", na=False) == False
     ]
@@ -777,6 +912,7 @@ def processWhatsapp(contactsPD):
 
     # Add IMEI Column
     whatsAppPD[originIMEI] = phoneData.IMEI
+    whatsAppPD["inputFile"] = phoneData.inFile
 
     # Remove working columns.
     exportCols = []
@@ -787,6 +923,7 @@ def processWhatsapp(contactsPD):
         print(exportCols)
 
     # Export CSV
+    print("{} WhatsApp contacts located".format(len(whatsAppPD["Name"])))
     print("Exporting {}-WHATSAPP.csv".format(phoneData.inFile))
     logging.info("Exporting Whatsapp from {}".format(phoneData.inFile))
     whatsAppPD[exportCols].to_csv(
@@ -819,7 +956,10 @@ def processZalo(contactsPD):
             ] = ZaloPD[x].str.split(":", n=1, expand=True)[1]
 
     processZaloContacts(ZaloPD)
+
     ZaloPD[originIMEI] = phoneData.IMEI
+    ZaloPD["inputFile"] = phoneData.inFile
+
     exportCols = []
     for x in ZaloPD.columns:
         if isinstance(x, str):
@@ -835,7 +975,7 @@ def processZalo(contactsPD):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__description__,
-        epilog="Developed by {}, version {}".format(str(__author__), str(__version__)),
+        epilog="Developed by {}".format(str(__author__), str(__version__)),
     )
 
     parser.add_argument(

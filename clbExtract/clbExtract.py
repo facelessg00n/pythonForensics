@@ -1,18 +1,25 @@
 """
 Extracts nested contacts data from Cellebrite formatted Excel documents.
     - Cellebrite Stores contact details in multiline Excel cells.
-Formatted with Black
+
+Formatted unapologetically with Black
 
 Changelog
+0.7 - Add Provenance data column
+    - Fix issue where WhatsApp or Facebook may not export due to lack if 'Interaction Statuses' Column
+
+0.6 - Fix issue with Threema user ID attribution
+    - Fix issue with parsers crashing out, now raises an exception and continues.
+
+
 0.5 - Added support for recents - at this time this is kept separate from native contacts
     - Warning re large files, pandas is unable to provide load time estimates
     - Add option to normalise Au mobile phone by converting +614** to 04**
     - Minor tidyups and fixes to logging.
     - Fix WeChat exception for older style excels
     - Fix Whatsapp exeption when interaction status is not populated
-    - Fix exception when there is no IMEI entry at all, eg. older iPads
-    - Populate and export source file columns
-
+    - Fix Exception when there is no IMEI entry at all, eg. older iPads
+    - Populate and export source columns
 
 0.4a - Added support for Cellebrite files with device info stored in "device" rather than name columns
 
@@ -38,7 +45,7 @@ import sys
 ## Details
 __description__ = 'Flattens Cellebrite formatted Excel files. "Contacts" and "Device Info" tabs are required.'
 __author__ = "facelessg00n"
-__version__ = "0.5"
+__version__ = "0.7"
 
 parser = argparse.ArgumentParser(
     description=__description__,
@@ -56,6 +63,8 @@ ausNormal = True
 
 # File size warning (MB)
 warnSize = 50
+
+provenanceCols = ["WARRANT", "COLLECT", "WITNESS"]
 
 # ----------- Logging options -------------------------------------
 
@@ -98,12 +107,16 @@ class phoneData:
     IMEI2 = None
     inFile = None
     inPath = None
+    inProvenance = None
 
-    def __init__(self, IMEI=None, IMEI2=None, inFile=None, inPath=None) -> None:
+    def __init__(
+        self, IMEI=None, IMEI2=None, inFile=None, inPath=None, inProvenance=None
+    ) -> None:
         self.IMEI = IMEI
         self.IMEI2 = IMEI2
         self.inFile = inFile
         self.inPath = inPath
+        self.inProvenance = inProvenance
 
 
 # -------------Functions live here ------------------------------------------
@@ -112,7 +125,7 @@ class phoneData:
 
 
 # Finds and processes all excel files in the working directory.
-def bulkProcessor():
+def bulkProcessor(inputProvenance):
     FILE_PATH = os.getcwd()
     inputFiles = glob.glob("*.xlsx")
     print((str(len(inputFiles)) + " Excel files located. \n"))
@@ -123,26 +136,29 @@ def bulkProcessor():
         print("Exiting.")
         quit()
     else:
-        for x in inputFiles:
-            if os.path.exists(x):
+        for inputFile in inputFiles:
+            if os.path.exists(inputFile):
                 try:
-                    processMetadata(x)
+                    processMetadata(inputFile, inputProvenance)
                 # Need to deal with $ files.
                 except FileNotFoundError:
                     print("File does not exist or temp file detected")
                     pass
     if debug:
-        for x in inputFiles:
-            inputFilename = x.split(".")[0]
+        for inputFile in inputFiles:
+            inputFilename = inputFile.split(".")[0]
             print(inputFilename)
 
 
 # FIXME - Deal with error when this info is missing
 ### -------- Process phone metadata ------------------------------------------------------
-def processMetadata(inputFile):
+def processMetadata(inputFile, inputProvenance):
     inputFile = inputFile
+    print("Input Provenance is {}".format(inputProvenance))
     print("Extracting metadata from {}".format(inputFile))
     logging.info("Extracting metadata from {}".format(inputFile))
+
+    phoneData.inProvenance = inputProvenance
 
     fileSize = os.path.getsize(inputFile) / 1048576
     if fileSize > warnSize:
@@ -165,6 +181,7 @@ def processMetadata(inputFile):
             ]
             phoneData.inFile = Path(inputFile).stem
             phoneData.inPath = os.path.dirname(inputFile)
+            phoneData.inProvenance = inputProvenance
         except:
             print("Attempting Device Column")
             try:
@@ -224,11 +241,11 @@ def processMetadata(inputFile):
             )
             phoneData.IMEI = None
             phoneData.IMEI2 = None
-
             phoneData.inFile = Path(inputFile).stem
             phoneData.inPath = os.path.dirname(inputFile)
             print("Loaded {}, with no IMEI".format(inputFile))
             logging.info("Loaded {}, with no IMEI".format(inputFile))
+            pass
 
         except ValueError:
             print(
@@ -248,9 +265,12 @@ def processMetadata(inputFile):
             phoneData.inPath = os.path.dirname(inputFile)
             print("\033[1;31m Loaded {}, with no IMEI".format(inputFile))
             logging.info("Loaded {}, with no IMEI".format(inputFile))
+            pass
 
     try:
         processContacts(inputFile)
+    except Exception as e:
+        print(e)
     except ValueError:
         print("\033[1;31m No Contacts tab  found, is this a correctly formatted Excel?")
         logging.error(
@@ -286,7 +306,7 @@ def processContacts(inputFile):
         sheet_name=clbContactSheet,
         header=1,
         index_col="#",
-        usecols=["#", "Name", "Interaction Statuses", "Entries", "Source", "Account"],
+        usecols=["#", "Name", "Entries", "Source", "Account"],
     )
 
     print("\033[0mProcessing the following app types for : {}".format(phoneData.inFile))
@@ -296,36 +316,83 @@ def processContacts(inputFile):
             print("{} : \u2713 ".format(x))
         else:
             print("{} : \u2716".format(x))
+
     # Process native contacts
     try:
         processAppleNative(contactsPD)
-    except:
-        print("Processing native contacts failed.")
+    except Exception as e:
+        print("Processing native contacts failed")
+        print(e)
         pass
+
     # Process Apps
     for x in applist:
         if x == "Facebook Messenger":
-            processFacebookMessenger(contactsPD)
+            try:
+                processFacebookMessenger(contactsPD)
+            except Exception as e:
+                logging.warning("Failed to parse Facebook messenger - {}".format(e))
+                pass
         if x == "Instagram":
-            processInstagram(contactsPD)
+            try:
+                processInstagram(contactsPD)
+            except:
+                logging.warning("Failed to parse Instagram")
+                pass
         if x == "Line":
-            processLine(contactsPD)
+            try:
+                processLine(contactsPD)
+            except:
+                logging.warning("Failed to parse Line")
+                pass
         if x == "Recents":
-            processRecents(contactsPD)
+            try:
+                processRecents(contactsPD)
+            except:
+                logging.warning("Failed to parse Recents")
+                pass
         if x == "Snapchat":
-            processSnapChat(contactsPD)
+            try:
+                processSnapChat(contactsPD)
+            except:
+                logging.warning("Failed to parse Snapchat")
+                pass
         if x == "Telegram":
-            processTelegram(contactsPD)
+            try:
+                processTelegram(contactsPD)
+            except:
+                logging.warning("Failed to parse Telegram")
+                pass
         if x == "Threema":
-            processThreema(contactsPD)
+            try:
+                processThreema(contactsPD)
+            except:
+                logging.warning("Failed to parse Threema")
+                pass
         if x == "Signal":
-            processSignal(contactsPD)
+            try:
+                processSignal(contactsPD)
+            except:
+                logging.warning("Failed to parse Signal")
+                pass
         if x == "WeChat":
-            processWeChat(contactsPD)
+            try:
+                processWeChat(contactsPD)
+            except:
+                logging.warning("Failed to parse WeChat")
+                pass
         if x == "WhatsApp":
-            processWhatsapp(contactsPD)
+            try:
+                processWhatsapp(contactsPD)
+            except Exception as e:
+                logging.warning("Failed to parse WhatsApp - {}".format(e))
+                pass
         if x == "Zalo":
-            processZalo(contactsPD)
+            try:
+                processZalo(contactsPD)
+            except:
+                logging.warning("Failed to parse Zalo")
+                pass
 
     print("\nProcessing of {} complete".format(inputFile))
 
@@ -365,27 +432,19 @@ def processFacebookMessenger(contactsPD):
     for x in facebookMessengerPD.columns:
         if isinstance(x, str):
             exportCols.append(x)
-    print("\n")
     print(
         "{} user accounts located".format(len(facebookMessengerPD["Account"].unique()))
     )
     print("{} contacts located".format(len(facebookMessengerPD["Account ID"].unique())))
     print("Exporting {}-FB-MESSENGER.csv".format(phoneData.inFile))
     logging.info("Exporting FB messenger from {}".format(phoneData.inFile))
-    facebookMessengerPD[exportCols].to_csv(
-        "{}-FB-MESSENGER.csv".format(phoneData.inFile),
-        index=False,
-        columns=[
-            originIMEI,
-            "Account",
-            "Interaction Statuses",
-            "Name",
-            "User Name",
-            "Account ID",
-            "Source",
-            "inputFile",
-        ],
-    )
+    try:
+        facebookMessengerPD[exportCols].to_csv(
+            "{}-FB-MESSENGER.csv".format(phoneData.inFile),
+            index=False,
+        )
+    except Exception as e:
+        print(e)
 
 
 # ----- Parse Instagram data ------------------------------------------------------------------
@@ -436,6 +495,7 @@ def processInstagram(contactsPD):
             "inputFile",
             "Source",
             "inputFile",
+            "Provenance",
         ],
     )
 
@@ -512,6 +572,7 @@ def processAppleNative(contactsPD):
     ]
     nativeContactsPD[originIMEI] = phoneData.IMEI
     nativeContactsPD["inputFile"] = phoneData.inFile
+    nativeContactsPD["Provenance"] = phoneData.inProvenance
 
     nativeContactsPD["Entries"] = (
         nativeContactsPD["Entries"]
@@ -529,6 +590,7 @@ def processAppleNative(contactsPD):
 
     if debug:
         print(nativeContactsPD)
+
     # nativeContactsPD = nativeContactsPD[[originIMEI, "Name", "Entries", "Interaction Statuses"]]
     print("{} contacts located.".format(len(nativeContactsPD)))
     print("Exporting {}-NATIVE.csv".format(phoneData.inFile))
@@ -545,6 +607,7 @@ def processRecents(contactsPD):
 
     recentsPD[originIMEI] = phoneData.IMEI
     recentsPD["inputFile"] = phoneData.inFile
+    recentsPD["Provenance"] = phoneData.inProvenance
 
     recentsPD["Entries"] = (
         recentsPD["Entries"]
@@ -601,6 +664,7 @@ def processSignal(contactsPD):
 
     signalPD[originIMEI] = phoneData.IMEI
     signalPD["inputFile"] = phoneData.inFile
+    signalPD["Provenance"] = phoneData.inProvenance
 
     export_cols = [originIMEI, "Name", "User Name"]
     export_cols.extend(selected_cols)
@@ -640,6 +704,7 @@ def processSnapChat(contactsPD):
 
     snapPD[originIMEI] = phoneData.IMEI
     snapPD["inputFile"] = phoneData.inFile
+    snapPD["Provenance"] = phoneData.inProvenance
 
     exportCols = []
     for x in snapPD.columns:
@@ -654,7 +719,15 @@ def processSnapChat(contactsPD):
     snapPD[exportCols].to_csv(
         "{}-SNAPCHAT.csv".format(phoneData.inFile),
         index=False,
-        columns=[originIMEI, "Name", "User Name", "User ID", "inputFile", "Source"],
+        columns=[
+            originIMEI,
+            "Name",
+            "User Name",
+            "User ID",
+            "Source",
+            "inputFile",
+            "Provenance",
+        ],
     )
 
 
@@ -690,6 +763,8 @@ def processTelegram(contactsPD):
 
     telegramPD[originIMEI] = phoneData.IMEI
     telegramPD["inputFile"] = phoneData.inFile
+    telegramPD["Provenance"] = phoneData.inProvenance
+    telegramPD["source"] = "Telegram"
     exportCols = []
     for x in telegramPD.columns:
         if isinstance(x, str):
@@ -719,14 +794,26 @@ def processThreema(contactsPD):
 
     def ThreemaParse(ThreemaPD):
         for x in selected_cols:
-            ThreemaPD.loc[
-                (ThreemaPD[x].str.contains("User ID-:", na=False)), "Threema ID"
-            ] = ThreemaPD[x].str.split(":", n=1, expand=True)[1]
+            try:
+                ThreemaPD.loc[
+                    (ThreemaPD[x].str.contains("User ID-identity:", na=False)),
+                    "Threema ID",
+                ] = ThreemaPD[x].str.split(":", n=1, expand=True)[1]
+            except:
+                pass
+            try:
+                ThreemaPD.loc[
+                    (ThreemaPD[x].str.contains("User ID-Username:", na=False)),
+                    "ThreemaUsername",
+                ] = ThreemaPD[x].str.split(":", n=1, expand=True)[1]
+            except:
+                pass
 
     ThreemaParse(threemaPD)
 
     threemaPD[originIMEI] = phoneData.IMEI
     threemaPD["inputFile"] = phoneData.inFile
+    threemaPD["Provenance"] = phoneData.inProvenance
 
     exportCols = []
     for x in threemaPD.columns:
@@ -811,6 +898,7 @@ def processWeChat(contactsPD):
 
     WeChatPD[originIMEI] = phoneData.IMEI
     WeChatPD["inputFile"] = phoneData.inFile
+    WeChatPD["Provenance"] = phoneData.inProvenance
     WeChatPD["Source"] = "Weixin"
 
     # Export Columns where the title is a string to drop working columns
@@ -829,19 +917,29 @@ def processWeChat(contactsPD):
 def processWhatsapp(contactsPD):
     print("\nProcessing WhatsApp")
     whatsAppPD = contactsPD[contactsPD["Source"] == "WhatsApp"].copy()
-    whatsAppPD = whatsAppPD[["Name", "Entries", "Source", "Interaction Statuses"]]
-    # Datatype needs to be object not float to allow filtering by string without throwing an error
     try:
+        whatsAppPD = whatsAppPD[["Name", "Entries", "Source", "Interaction Statuses"]]
+        # Datatype needs to be object not float to allow filtering by string without throwing an error
         whatsAppPD["Interaction Statuses"] = whatsAppPD["Interaction Statuses"].astype(
             object
         )
+        # Shared contacts are not associated with a Whats app ID and cause problems.
+        print(whatsAppPD.dtypes)
+        whatsAppPD = whatsAppPD[
+            whatsAppPD["Interaction Statuses"].str.contains("Shared", na=False) == False
+        ]
     except Exception as e:
         print(e)
-    # Shared contacts are not associated with a Whats app ID and cause problems.
-    print(whatsAppPD.dtypes)
-    whatsAppPD = whatsAppPD[
-        whatsAppPD["Interaction Statuses"].str.contains("Shared", na=False) == False
-    ]
+        print("Interaction statuses column not found, ignoring")
+        # print(whatsAppPD)
+        whatsAppPD = whatsAppPD[
+            [
+                "Name",
+                "Entries",
+                "Source",
+            ]
+        ]
+
     # Unpack nested data
     whatsAppPD = whatsAppPD.drop("Entries", axis=1).join(
         whatsAppPD["Entries"].str.split("\n", expand=True)
@@ -913,6 +1011,8 @@ def processWhatsapp(contactsPD):
     # Add IMEI Column
     whatsAppPD[originIMEI] = phoneData.IMEI
     whatsAppPD["inputFile"] = phoneData.inFile
+    whatsAppPD["Provenance"] = phoneData.inProvenance
+    whatsAppPD["Source"] = "Whatsapp"
 
     # Remove working columns.
     exportCols = []
@@ -959,6 +1059,7 @@ def processZalo(contactsPD):
 
     ZaloPD[originIMEI] = phoneData.IMEI
     ZaloPD["inputFile"] = phoneData.inFile
+    ZaloPD["Provenance"] = phoneData.inProvenance
 
     exportCols = []
     for x in ZaloPD.columns:
@@ -987,6 +1088,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "-p",
+        "--p",
+        dest="inputProvenance",
+        choices=provenanceCols,
+        required=False,
+    )
+
+    parser.add_argument(
         "-b",
         "--bulk",
         dest="bulk",
@@ -1003,7 +1112,7 @@ if __name__ == "__main__":
 
     if args.bulk:
         print("Bulk Process")
-        bulkProcessor()
+        bulkProcessor(args.inputProvenance)
 
     if args.inputFilename:
         if not os.path.exists(args.inputFilename):
@@ -1013,4 +1122,4 @@ if __name__ == "__main__":
                 )
             )
             sys.exit(1)
-        processMetadata(args.inputFilename)
+        processMetadata(args.inputFilename, args.inputProvenance)

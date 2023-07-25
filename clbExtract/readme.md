@@ -28,6 +28,7 @@ options:
 - -h show this help message and exit
 - -f path to the input file
 - -b process all files in the working directory
+- -p add data provenance from one of the pre approved items
 
 Place the Excel files in the folder where the script is located to process the files in bulk.
 

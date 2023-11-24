@@ -12,4 +12,8 @@ Extracts contact details from Cellebrite formatted Excel files
 
 ### locationExtract.py
 
-Extracts location data from Cellebrite Excel files and conveerts them to an ESRI freinedly format. Can also look for gaps of more than a specified time.
+Extracts location data from Cellebrite Excel files and converts them to an ESRI friendly format. Can also look for gaps of more than a specified time.
+
+### offlineTranslate
+
+Utilises LibreTranslate for the bulk offline translation of messages

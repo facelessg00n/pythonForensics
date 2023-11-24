@@ -25,3 +25,14 @@ In reality it will take any Excel spreadsheet with a Column named messages.
 
 - Auto detection of language is much faster however not as accurate. If you know the language it is best to select one of the language codes manually. To retrieve the language codes run `bulk_translate.py -g` and the available languages from the server will be listed.
 - The generated CSV files may not open in Microsoft Excel however will open in LibreOffice Calc. It will however also attempt to output Excel files.
+- Defaults to English translation but other languages are possible
+
+Example usage
+
+    Auto Detect
+    python3 bulk_translate.py -f excel.xlsx
+    
+    Manually Select language
+    python3 bulk_translate.py -f excel.xlsx -l zh
+
+![screenshot](https://github.com/facelessg00n/pythonForensics/blob/main/offlineTranslate/images/offlineTranslate.jpg)

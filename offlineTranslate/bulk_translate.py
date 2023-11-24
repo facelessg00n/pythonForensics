@@ -158,7 +158,7 @@ def loadAndTranslate(inputFile, inputLanguage):
 
     try:
         outputFrame.to_excel(
-            f"{fileName}_translated.csv",
+            f"{fileName}_translated.xlsx",
             index=False,
             columns=[
                 "detected_language",

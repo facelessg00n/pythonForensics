@@ -2,7 +2,7 @@
 
 ---
 
-Many forensic tools such as Cellebrite Physical Analyzer have inbuilt translation offerings however my experience shows they can be slow or unreliable. As an offline translation option is often required I began to seek other means of translation. Enter LibreTranslate, an self hosted Machine translation API.
+Many forensic tools have inbuilt translation offerings however my experience shows they can be slow or unreliable. As an offline translation option is often required I began to seek other means of translation. Enter LibreTranslate, an self hosted Machine translation API.
 
 <https://github.com/LibreTranslate/LibreTranslate>
 

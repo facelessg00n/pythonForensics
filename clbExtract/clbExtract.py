@@ -4,20 +4,30 @@ Extracts nested contacts data from Cellebrite formatted Excel documents.
 
 Formatted unapologetically with Black
 
+# Current Known Issues
+# FIXME - Fix Instagram parser, account ID's have changed
+# FIXME - Fix Og Signal parser, Column order
+
 Changelog
+0.9 - Fix - Handles name change to Signal Private Messenger and extra data columns
+    - prints version to command line
+    - Fix bug where files ending in .XLXS (Caps) wouldn't be automatically found
+    - Support for Outlook contacts
+
+0.8 - Fix issue where Input file was entered twice for Instagram export sheet
+
 0.7 - Add Provenance data column
     - Fix issue where WhatsApp or Facebook may not export due to lack if 'Interaction Statuses' Column
 
 0.6 - Fix issue with Threema user ID attribution
     - Fix issue with parsers crashing out, now raises an exception and continues.
 
-
 0.5 - Added support for recents - at this time this is kept separate from native contacts
     - Warning re large files, pandas is unable to provide load time estimates
     - Add option to normalise Au mobile phone by converting +614** to 04**
     - Minor tidyups and fixes to logging.
     - Fix WeChat exception for older style excels
-    - Fix Whatsapp exeption when interaction status is not populated
+    - Fix Whatsapp exception when interaction status is not populated
     - Fix Exception when there is no IMEI entry at all, eg. older iPads
     - Populate and export source columns
 
@@ -34,6 +44,7 @@ Changelog
 0.1 - Initial concept
 
 """
+
 import argparse
 import glob
 import logging
@@ -45,11 +56,11 @@ import sys
 ## Details
 __description__ = 'Flattens Cellebrite formatted Excel files. "Contacts" and "Device Info" tabs are required.'
 __author__ = "facelessg00n"
-__version__ = "0.7"
+__version__ = "0.9"
 
 parser = argparse.ArgumentParser(
     description=__description__,
-    epilog="Developed by {}".format(str(__author__), str(__version__)),
+    epilog="Developed by {}, version {}".format(str(__author__), str(__version__)),
 )
 
 # ----------- Options -----------
@@ -64,7 +75,6 @@ ausNormal = True
 # File size warning (MB)
 warnSize = 50
 
-provenanceCols = ["WARRANT", "COLLECT", "WITNESS"]
 
 # ----------- Logging options -------------------------------------
 
@@ -82,6 +92,8 @@ clbPhoneInfov2 = "Device Information"
 
 # FIXME
 #### ---- Column names and other options ---------------------------------------------
+provenanceCols = ["WARRANT", "COLLECT", "EXAM", "NOTICE"]
+
 contactOutput = "ContactDetail"
 contactTypeOutput = "ContactType"
 originIMEI = "originIMEI"
@@ -90,8 +102,10 @@ parsedApps = [
     "Instagram",
     "Line",
     "Native",
+    "Outlook",
     "Recents",
     "Signal",
+    "Signal Private Messenger",
     "Snapchat",
     "WhatsApp",
     "Telegram",
@@ -127,7 +141,7 @@ class phoneData:
 # Finds and processes all excel files in the working directory.
 def bulkProcessor(inputProvenance):
     FILE_PATH = os.getcwd()
-    inputFiles = glob.glob("*.xlsx")
+    inputFiles = glob.glob("*.xlsx") + glob.glob("*.XLSX")
     print((str(len(inputFiles)) + " Excel files located. \n"))
     logging.info("Bulk processing {} files".format(str(len(inputFiles))))
     # If there are no files found exit the process.
@@ -314,6 +328,7 @@ def processContacts(inputFile):
     for x in applist:
         if x in parsedApps:
             print("{} : \u2713 ".format(x))
+
         else:
             print("{} : \u2716".format(x))
 
@@ -345,6 +360,12 @@ def processContacts(inputFile):
             except:
                 logging.warning("Failed to parse Line")
                 pass
+        if x == "Outlook":
+            try:
+                processOutlookContacts(contactsPD)
+            except:
+                logging.warning("Failed to parse Outlook")
+                pass
         if x == "Recents":
             try:
                 processRecents(contactsPD)
@@ -375,6 +396,12 @@ def processContacts(inputFile):
             except:
                 logging.warning("Failed to parse Signal")
                 pass
+        if x == "Signal Private Messenger":
+            try:
+                processSignalPrivateMessenger(contactsPD)
+            except:
+                logging.warning("Failed to parse Signal Private Messenger")
+
         if x == "WeChat":
             try:
                 processWeChat(contactsPD)
@@ -427,6 +454,7 @@ def processFacebookMessenger(contactsPD):
     facebookMessengerPD["Source"] = "Messenger"
     facebookMessengerPD[originIMEI] = phoneData.IMEI
     facebookMessengerPD["inputFile"] = phoneData.inFile
+    facebookMessengerPD["Provenance"] = phoneData.inProvenance
 
     exportCols = []
     for x in facebookMessengerPD.columns:
@@ -482,21 +510,10 @@ def processInstagram(contactsPD):
     print("{} Instagram contacts located".format(len(instagramPD["Name"])))
     print("Exporting {}-INSTAGRAM.csv".format(phoneData.inFile))
     logging.info("Exporting Instagram from {}".format(phoneData.inFile))
+    # TODO - Fix column handling
     instagramPD[exportCols].to_csv(
         "{}-INSTAGRAM.csv".format(phoneData.inFile),
         index=False,
-        columns=[
-            originIMEI,
-            "Account",
-            "Name",
-            "User Name",
-            "Instagram ID",
-            "Interaction Statuses",
-            "inputFile",
-            "Source",
-            "inputFile",
-            "Provenance",
-        ],
     )
 
 
@@ -548,12 +565,15 @@ def processLine(contactsPD):
 
 # ------------Process native contact list ------------------------------------------------
 def processAppleNative(contactsPD):
+
     print("\nProcessing Native Contacts")
     # nativeContactsPD = contactsPD[contactsPD["Source"].isna()]
 
+    # Contacts are stored with either null (iPhone) or "Phone" for Android
     nativeContactsPD = contactsPD[
         (contactsPD.Source.isna()) | (contactsPD.Source == "Phone")
     ].copy()
+
     # Fill NaN values with : to prevent error with blank entries.
     nativeContactsPD.Entries = nativeContactsPD.Entries.fillna(":")
 
@@ -574,13 +594,19 @@ def processAppleNative(contactsPD):
     nativeContactsPD["inputFile"] = phoneData.inFile
     nativeContactsPD["Provenance"] = phoneData.inProvenance
 
+    # Remove erroneous characters, need to make this a regex
+    # TODO Use a regex to tidy this up.
     nativeContactsPD["Entries"] = (
         nativeContactsPD["Entries"]
         .str.split(":", n=1, expand=True)[1]
         .str.strip()
-        .str.replace(" ", "")
-        .str.replace("-", "")
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
         .str.replace("+", "", regex=False)
+        # Fix issue with inseyets reports
+        .str.replace("Message", "", regex=False)
+        .str.replace("(", "", regex=False)
+        .str.replace(")", "", regex=False)
     )
 
     if ausNormal:
@@ -596,6 +622,37 @@ def processAppleNative(contactsPD):
     print("Exporting {}-NATIVE.csv".format(phoneData.inFile))
     logging.info("Exporting Native contacts from {}".format(phoneData.inFile))
     nativeContactsPD.to_csv("{}-NATIVE.csv".format(phoneData.inFile), index=False)
+
+
+# Process Outlook Contacts
+def processOutlookContacts(contactsPD):
+    print("\nProcessing Outlook Contacts")
+
+    outlookContactsPD = contactsPD[(contactsPD.Source == "Outlook")].copy()
+    # Fill NaN values with : to prevent error with blank entries.
+    outlookContactsPD.Entries = outlookContactsPD.Entries.fillna(":")
+
+    outlookContactsPD = outlookContactsPD.drop("Entries", axis=1).join(
+        outlookContactsPD["Entries"]
+        .str.split("\n", expand=True)
+        .stack()
+        .reset_index(level=1, drop=True)
+        .rename("Entries")
+    )
+
+    outlookContactsPD = outlookContactsPD[["Account", "Name", "Entries", "Source"]]
+    outlookContactsPD[originIMEI] = phoneData.IMEI
+    outlookContactsPD["inputFile"] = phoneData.inFile
+    outlookContactsPD["Provenance"] = phoneData.inProvenance
+
+    outlookContactsPD["Entries"] = (
+        outlookContactsPD["Entries"].str.split(":", n=1, expand=True)[1].str.strip()
+    )
+
+    print("{} contacts located.".format(len(outlookContactsPD)))
+    print("Exporting {}-OUTLOOK.csv".format(phoneData.inFile))
+    logging.info("Exporting Native contacts from {}".format(phoneData.inFile))
+    outlookContactsPD.to_csv("{}-OUTLOOK.csv".format(phoneData.inFile), index=False)
 
 
 # ----------- Parse Recents -----------------------------------------------------------------------
@@ -637,7 +694,7 @@ def processSignal(contactsPD):
         signalPD["Entries"].str.split("\n", expand=True)
     )
 
-    # Data is expended into columns with integern names, add these columsn to selected_cols so we can search them later
+    # Data is expended into columns with integer names, add these columsn to selected_cols so we can search them later
     selected_cols = []
     for x in signalPD.columns:
         if isinstance(x, int):
@@ -674,6 +731,80 @@ def processSignal(contactsPD):
     signalPD.to_csv(
         "{}-SIGNAL.csv".format(phoneData.inFile), index=False, columns=export_cols
     )
+
+
+# ----------- Parse Signal Private Messenger--------------------------------------------------------
+def processSignalPrivateMessenger(contactsPD):
+    print("\nProcessing Signal Private Messenger")
+    spmPD = contactsPD[contactsPD["Source"] == "Signal Private Messenger"].copy()
+    spmPD = spmPD.drop("Entries", axis=1).join(
+        spmPD["Entries"].str.split("\n", expand=True)
+    )
+    # spmPD['Entries'].tolist()
+    # spmPD.explode('Entries')
+    # spmPD = spmPD.reset_index(drop=True)
+    spmPD[originIMEI] = phoneData.IMEI
+    spmPD["inputFile"] = phoneData.inFile
+    spmPD["Provenance"] = phoneData.inProvenance
+
+    selected_cols = []
+    for x in spmPD.columns:
+        if isinstance(x, int):
+            selected_cols.append(x)
+
+    def spmContacts(spmPD):
+        for x in selected_cols:
+            try:
+                spmPD.loc[(spmPD[x].str.contains("Phone-:", na=False)), "Phone"] = (
+                    spmPD[x].str.split(":", n=1, expand=True)[1]
+                )
+            except:
+                pass
+            try:
+                spmPD.loc[(spmPD[x].str.contains("User ID-:", na=False)), "User-ID"] = (
+                    spmPD[x].str.split(":", n=1, expand=True)[1]
+                )
+            except:
+                pass
+            try:
+                spmPD.loc[
+                    (spmPD[x].str.contains("User ID-Nickname:", na=False)),
+                    "User-ID-Nickname",
+                ] = spmPD[x].str.split(":", n=1, expand=True)[1]
+            except:
+                pass
+            try:
+                spmPD.loc[
+                    (spmPD[x].str.contains("User ID-Username:", na=False)),
+                    "User-ID-Username",
+                ] = spmPD[x].str.split(":", n=1, expand=True)[1]
+            except:
+                pass
+            try:
+                spmPD.loc[
+                    (spmPD[x].str.contains("User ID-ProfileKey:", na=False)),
+                    "User-ID-ProfileKey",
+                ] = spmPD[x].str.split(":", n=1, expand=True)[1]
+            except:
+                pass
+
+    spmContacts(spmPD)
+    # spmPD.info()
+
+    exportCols = []
+    # Remove column from previous step
+    for x in spmPD.columns:
+        if isinstance(x, str):
+            # if x !="Provenence" or x != 'originIMEI' or x != 'inputFile':
+            if x not in ["Provenance", "originIMEI", "inputFile"]:
+                exportCols.append(x)
+
+    exportCols.extend(["originIMEI", "inputFile", "Provenance"])
+
+    print("Located {} Signal Private Messenger contacts.".format(len(spmPD["Name"])))
+    print("Exporting {}-Signal-PM.csv".format(phoneData.inFile))
+    logging.info("Exporting Signal Private Messenger from {}".format(phoneData.inFile))
+    spmPD[exportCols].to_csv("{}-Signal-PM.csv".format(phoneData.inFile), index=False)
 
 
 # ----------- Parse Snapchat data ------------------------------------------------------------------
@@ -841,6 +972,7 @@ def processWeChat(contactsPD):
             selected_cols.append(x)
 
     def WeChatContacts(WeChatPD):
+
         for x in selected_cols:
             # FIXME Usernames that contain @stranger???
             # FIXME Try / Except / Pass
